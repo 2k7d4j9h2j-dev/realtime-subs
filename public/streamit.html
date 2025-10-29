@@ -1,65 +1,114 @@
-import 'dotenv/config';
-import express from 'express';
-import fetch from 'node-fetch';
-import { WebSocketServer } from 'ws';
-import path from 'path';
-import { fileURLToPath } from 'url';
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>StreamIt – Live DE→EN</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 16px; }
+    button { font-size: 18px; padding: 8px 16px; }
+    #log { white-space: pre-wrap; margin-top: 12px; font-family: ui-monospace, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <h1>StreamIt – Live (DE → EN)</h1>
+  <button id="start">START</button>
+  <button id="stop" disabled>STOP</button>
+  <div id="log"></div>
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+<script>
+const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n'; };
 
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
+let pc, micStream, dataChannel, subsWS;
 
-// 1) Ephemeres Token für Realtime erzeugen (vom Browser aufgerufen)
-app.post('/session', async (req, res) => {
-  try {
-    const r = await fetch('https://api.openai.com/v1/realtime/sessions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        // Modell für Realtime; kann je nach Verfügbarkeit abweichen
-        model: 'gpt-4o-realtime-preview',
-        // Ziel: Deutsch erkennen & EN ausgeben (Systemprompt hilft)
-        voice: null, // wir wollen Text, keine Audio-Antwort
-        modalities: ["text","audio","transcription"],
-        instructions: "You are a live subtitle/translation agent. Recognize German speech and output English text subtitles. Keep outputs concise.",
-        // Optional: automatische Turn-Detection / VAD
-        turn_detection: { type: "server_vad" }
-      })
-    });
-    const data = await r.json();
-    if (!r.ok) {
-      console.error('Session error:', data);
-      return res.status(500).json({ error: data });
-    }
-    res.json(data); // enthält ephemeral client_secret etc.
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: String(e) });
-  }
-});
+async function getEphemeral() {
+  const r = await fetch('/session', { method: 'POST' });
+  if (!r.ok) throw new Error('Session failed');
+  return r.json();
+}
 
-// 2) WebSocket-Bus für Untertitel (Publisher = streamit, Viewer = getit)
-const server = app.listen(process.env.PORT || 3000, () => {
-  console.log('Server listening on', server.address().port);
-});
-const wss = new WebSocketServer({ server, path: '/ws/subs' });
+async function start() {
+  document.getElementById('start').disabled = true;
 
-const clients = new Set();
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  ws.on('message', (msg) => {
-    // Einfaches Broadcast-Protokoll: {type:"partial"|"final", text:"..."}
-    for (const c of clients) {
-      if (c !== ws && c.readyState === 1) {
-        c.send(msg);
+  // 1) Mic vom iPad holen
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  log('Mic OK');
+
+  // 2) Ephemeral Token + Realtime WebRTC
+  const sess = await getEphemeral();
+  const EPHEMERAL_KEY = sess.client_secret?.value || sess.client_secret || sess?.client_secret_key;
+  const MODEL_URL = "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
+
+  pc = new RTCPeerConnection();
+  micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
+
+  // DataChannel, um Realtime-Events als JSON zu erhalten
+  dataChannel = pc.createDataChannel("oai-events");
+  dataChannel.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      // Wichtige Events: response.output_text.delta / response.output_text.done / transcript.delta (je nach Modell)
+      if (ev.type === 'response.output_text.delta' && ev.delta) {
+        publishSub({ type: 'partial', text: ev.delta });
       }
+      if (ev.type === 'response.output_text.done' && ev.text) {
+        publishSub({ type: 'final', text: ev.text });
+      }
+      // Manche Varianten senden 'response.audio_transcript.delta' etc.
+      if (ev.type?.includes('transcript') && ev.delta) {
+        publishSub({ type: 'partial', text: ev.delta });
+      }
+    } catch {}
+  };
+
+  // Remote audio (falls Modell sprechen würde – bei uns deaktiviert)
+  pc.ontrack = (e) => {
+    // not used (no TTS requested)
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  const sdpResp = await fetch(MODEL_URL, {
+    method: "POST",
+    body: offer.sdp,
+    headers: {
+      Authorization: `Bearer ${EPHEMERAL_KEY}`,
+      "Content-Type": "application/sdp"
     }
   });
-  ws.on('close', () => clients.delete(ws));
-});
+  const answer = { type: "answer", sdp: await sdpResp.text() };
+  await pc.setRemoteDescription(answer);
+
+  // 3) WS zu unserem Server für Subtitle-Broadcast
+  subsWS = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/subs');
+  subsWS.onopen = () => log('Subs WS connected');
+  subsWS.onerror = (e) => log('Subs WS error', e);
+  subsWS.onclose = () => log('Subs WS closed');
+
+  document.getElementById('stop').disabled = false;
+  log('Realtime connected');
+}
+
+function publishSub(payload) {
+  // payload: {type: "partial"|"final", text: "..."}
+  if (subsWS && subsWS.readyState === 1 && payload.text && payload.text.trim()) {
+    subsWS.send(JSON.stringify(payload));
+  }
+}
+
+async function stop() {
+  document.getElementById('stop').disabled = true;
+  try { dataChannel && dataChannel.close(); } catch {}
+  try { pc && pc.close(); } catch {}
+  try { micStream && micStream.getTracks().forEach(t => t.stop()); } catch {}
+  try { subsWS && subsWS.close(); } catch {}
+  document.getElementById('start').disabled = false;
+  log('Stopped.');
+}
+
+document.getElementById('start').onclick = start;
+document.getElementById('stop').onclick = stop;
+</script>
+</body>
+</html>
