@@ -1,0 +1,39 @@
+ <!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>GetIt – Live Subtitles</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html,body { height:100%; margin:0; background:#000; color:#fff; }
+    .wrap { display:flex; align-items:center; justify-content:center; height:100%; padding: 2rem; }
+    .box { max-width: 1200px; font: 700 48px/1.2 system-ui, sans-serif; }
+    .partial { opacity: 0.6; }
+    .final { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="wrap"><div class="box" id="out">Waiting…</div></div>
+<script>
+const out = document.getElementById('out');
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/subs');
+
+let pending = '';
+ws.onmessage = (m) => {
+  try {
+    const ev = JSON.parse(m.data);
+    if (ev.type === 'partial') {
+      pending = ev.text;
+      out.innerHTML = `<span class="final">${lastFinal.join(' ')}</span> <span class="partial">${pending}</span>`;
+    } else if (ev.type === 'final') {
+      lastFinal.push(ev.text);
+      if (lastFinal.length > 8) lastFinal.shift(); // einfache Historie
+      pending = '';
+      out.innerHTML = `<span class="final">${lastFinal.join(' ')}</span>`;
+    }
+  } catch {}
+};
+let lastFinal = [];
+</script>
+</body>
+</html>
