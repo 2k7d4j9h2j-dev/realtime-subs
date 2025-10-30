@@ -31,17 +31,17 @@ app.post('/session', async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        // Modell für Realtime; kann je nach Verfügbarkeit abweichen
         model: 'gpt-4o-realtime-preview-2024-10-01',
-        // Ziel: Deutsch erkennen & EN ausgeben (Systemprompt hilft)
-        voice: 'alloy', // wird ignoriert da wir nur Text wollen
+        voice: 'alloy',
         modalities: ["text", "audio"],
-        instructions: "You are a live subtitle/translation agent. Listen to German speech and provide English text translations in real-time. Keep translations concise and natural. Only respond with the translated text, nothing else.",
-        // Optional: automatische Turn-Detection / VAD
-        turn_detection: { type: "server_vad" },
+        instructions: "You are a real-time German-to-English translator. Your ONLY job is to translate German speech into English. When you hear German, immediately respond with the English translation. Be concise and natural. Do not add explanations, just translate.",
+        // WICHTIG: turn_detection mit create_response muss auf false, damit wir manuell steuern können
+        turn_detection: null,
         input_audio_transcription: {
           model: "whisper-1"
-        }
+        },
+        // Textausgabe priorisieren
+        temperature: 0.6
       })
     });
     

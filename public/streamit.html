@@ -64,55 +64,62 @@ async function start() {
         const ev = JSON.parse(e.data);
         
         // Nur wichtige Events detailliert loggen
-        if (ev.type.includes('transcript') || ev.type.includes('text')) {
+        if (ev.type.includes('transcript') || ev.type.includes('text') || ev.type.includes('delta')) {
           log('📝 Event:', ev.type, JSON.stringify(ev, null, 2));
         } else {
           log('Event:', ev.type);
         }
         
-        // Verschiedene Event-Typen die OpenAI senden kann:
-        
-        // 1. Audio-Transkript Delta (Echtzeit-Übersetzung)
-        if (ev.type === 'response.audio_transcript.delta' && ev.delta) {
-          log('→ Sende partial:', ev.delta);
-          publishSub({ type: 'partial', text: ev.delta });
-        }
-        
-        // 2. Audio-Transkript Done (Vollständige Übersetzung)
-        if (ev.type === 'response.audio_transcript.done' && ev.transcript) {
-          log('→ Sende final:', ev.transcript);
-          publishSub({ type: 'final', text: ev.transcript });
-        }
-        
-        // 3. Eingabe-Transkription (was der User gesagt hat)
+        // WICHTIG: Wenn Transkription abgeschlossen ist, fordere Übersetzung an!
         if (ev.type === 'conversation.item.input_audio_transcription.completed' && ev.transcript) {
-          log('→ Input transkribiert:', ev.transcript);
-          publishSub({ type: 'partial', text: '[DE] ' + ev.transcript });
+          log('→ Deutsche Eingabe transkribiert:', ev.transcript);
+          
+          // Zeige deutsche Eingabe an
+          publishSub({ type: 'partial', text: '[🇩🇪] ' + ev.transcript });
+          
+          // Fordere jetzt eine Übersetzungs-Response an
+          const responseRequest = {
+            type: 'response.create',
+            response: {
+              modalities: ['text'],
+              instructions: 'Translate the last German message to English. Only output the English translation, nothing else.'
+            }
+          };
+          log('→ Fordere Übersetzung an...');
+          dataChannel.send(JSON.stringify(responseRequest));
         }
         
-        if (ev.type === 'conversation.item.input_audio_transcription.delta' && ev.delta) {
-          log('→ Input delta:', ev.delta);
-        }
-        
-        // 4. Text-basierte Responses (falls Modell Text zurückgibt)
-        if (ev.type === 'response.output_text.delta' && ev.delta) {
-          log('→ Sende text delta:', ev.delta);
-          publishSub({ type: 'partial', text: ev.delta });
-        }
-        
-        if (ev.type === 'response.output_text.done' && ev.text) {
-          log('→ Sende text final:', ev.text);
-          publishSub({ type: 'final', text: ev.text });
-        }
-        
+        // Text-Response Events (die Übersetzung!)
         if (ev.type === 'response.text.delta' && ev.delta) {
-          log('→ Sende text delta:', ev.delta);
+          log('→ Übersetzung (partial):', ev.delta);
           publishSub({ type: 'partial', text: ev.delta });
         }
         
         if (ev.type === 'response.text.done' && ev.text) {
-          log('→ Sende text final:', ev.text);
+          log('→ Übersetzung (final):', ev.text);
           publishSub({ type: 'final', text: ev.text });
+        }
+        
+        // Alternative Response-Typen
+        if (ev.type === 'response.audio_transcript.delta' && ev.delta) {
+          log('→ Audio transcript delta:', ev.delta);
+          publishSub({ type: 'partial', text: ev.delta });
+        }
+        
+        if (ev.type === 'response.audio_transcript.done' && ev.transcript) {
+          log('→ Audio transcript done:', ev.transcript);
+          publishSub({ type: 'final', text: ev.transcript });
+        }
+        
+        // Content-basierte Responses
+        if (ev.type === 'response.content_part.delta' && ev.delta?.text) {
+          log('→ Content delta:', ev.delta.text);
+          publishSub({ type: 'partial', text: ev.delta.text });
+        }
+        
+        if (ev.type === 'response.content_part.done' && ev.part?.text) {
+          log('→ Content done:', ev.part.text);
+          publishSub({ type: 'final', text: ev.part.text });
         }
         
       } catch (err) {
