@@ -27,6 +27,7 @@ function connect() {
   console.log('URL:', wsUrl);
   
   ws = new WebSocket(wsUrl);
+  ws.binaryType = 'arraybuffer'; // Wichtig: Binärdaten richtig verarbeiten
   
   ws.onopen = () => {
     console.log('✅ WebSocket verbunden!');
@@ -60,10 +61,23 @@ function connect() {
     setTimeout(connect, 2000);
   };
 
-  ws.onmessage = (m) => {
+  ws.onmessage = async (m) => {
     try {
-      console.log('📩 Rohdaten empfangen:', m.data);
-      const ev = JSON.parse(m.data);
+      let text;
+      
+      // Konvertiere Blob/ArrayBuffer zu Text
+      if (m.data instanceof Blob) {
+        console.log('📩 Blob empfangen, konvertiere...');
+        text = await m.data.text();
+      } else if (m.data instanceof ArrayBuffer) {
+        console.log('📩 ArrayBuffer empfangen, konvertiere...');
+        text = new TextDecoder().decode(m.data);
+      } else {
+        text = m.data;
+      }
+      
+      console.log('📩 Text empfangen:', text);
+      const ev = JSON.parse(text);
       console.log('📝 Geparst:', ev);
       
       if (ev.type === 'partial') {
