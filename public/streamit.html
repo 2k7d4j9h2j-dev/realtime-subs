@@ -5,209 +5,169 @@
   <title>StreamIt – Live DE→EN</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, sans-serif; padding: 16px; }
-    button { font-size: 18px; padding: 8px 16px; }
-    #log { white-space: pre-wrap; margin-top: 12px; font-family: ui-monospace, Menlo, monospace; }
+    body { font-family: system-ui, sans-serif; padding: 16px; background: #1a1a1a; color: #fff; }
+    button { font-size: 18px; padding: 12px 24px; margin-right: 8px; border-radius: 6px; border: none; cursor: pointer; }
+    #start { background: #10a37f; color: white; }
+    #start:disabled { background: #666; cursor: not-allowed; }
+    #stop { background: #ef4444; color: white; }
+    #stop:disabled { background: #666; cursor: not-allowed; }
+    .status { margin: 20px 0; padding: 12px; background: #2a2a2a; border-radius: 6px; }
+    .status.recording { background: #10a37f22; border: 2px solid #10a37f; }
+    #log { white-space: pre-wrap; margin-top: 12px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; line-height: 1.6; }
   </style>
 </head>
 <body>
-  <h1>StreamIt – Live (DE → EN)</h1>
-  <button id="start">START</button>
-  <button id="stop" disabled>STOP</button>
+  <h1>🎙️ StreamIt – Live DE → EN Translation</h1>
+  <div>
+    <button id="start">START RECORDING</button>
+    <button id="stop" disabled>STOP</button>
+  </div>
+  <div class="status" id="status">Bereit</div>
   <div id="log"></div>
 
 <script>
-const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n'; };
+const log = (...a) => { 
+  const msg = a.join(' ');
+  console.log(...a);
+  document.getElementById('log').textContent += msg + '\n'; 
+};
 
-let pc, micStream, dataChannel, subsWS;
-
-async function getEphemeral() {
-  const r = await fetch('/session', { method: 'POST' });
-  if (!r.ok) throw new Error('Session failed');
-  return r.json();
-}
+let mediaRecorder = null;
+let audioChunks = [];
+let recordingInterval = null;
+let subsWS = null;
 
 async function start() {
   try {
     document.getElementById('start').disabled = true;
-
-    // 1) Mic vom iPad holen
-    log('Fordere Mikrofon-Zugriff an...');
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    log('✓ Mic OK');
-
-    // 2) Ephemeral Token + Realtime WebRTC
-    log('Hole Session-Token...');
-    const sess = await getEphemeral();
-    log('Session-Antwort:', JSON.stringify(sess, null, 2));
+    document.getElementById('status').textContent = 'Starte...';
     
-    const EPHEMERAL_KEY = sess.client_secret?.value || sess.client_secret || sess?.client_secret_key;
-    if (!EPHEMERAL_KEY) {
-      throw new Error('Kein Ephemeral Key erhalten! Session: ' + JSON.stringify(sess));
-    }
-    log('✓ Ephemeral Key erhalten');
+    // 1) Mikrofon-Zugriff
+    log('🎤 Fordere Mikrofon-Zugriff an...');
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    log('✅ Mikrofon-Zugriff erhalten');
     
-    const MODEL_URL = "https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01";
-
-    log('Erstelle WebRTC-Verbindung...');
-    pc = new RTCPeerConnection();
-    micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
-
-    // DataChannel, um Realtime-Events als JSON zu erhalten
-    dataChannel = pc.createDataChannel("oai-events");
-    dataChannel.onopen = () => log('✓ DataChannel offen');
-    dataChannel.onerror = (e) => log('❌ DataChannel Fehler:', e);
-    dataChannel.onclose = () => log('DataChannel geschlossen');
-    
-    dataChannel.onmessage = (e) => {
-      try {
-        const ev = JSON.parse(e.data);
-        
-        // Nur wichtige Events detailliert loggen
-        if (ev.type.includes('transcript') || ev.type.includes('text') || ev.type.includes('delta')) {
-          log('📝 Event:', ev.type, JSON.stringify(ev, null, 2));
-        } else {
-          log('Event:', ev.type);
-        }
-        
-        // WICHTIG: Wenn Transkription abgeschlossen ist, fordere Übersetzung an!
-        if (ev.type === 'conversation.item.input_audio_transcription.completed' && ev.transcript) {
-          log('→ Deutsche Eingabe transkribiert:', ev.transcript);
-          
-          // Zeige deutsche Eingabe an
-          publishSub({ type: 'partial', text: '[🇩🇪] ' + ev.transcript });
-          
-          // Fordere jetzt eine Übersetzungs-Response an
-          const responseRequest = {
-            type: 'response.create',
-            response: {
-              modalities: ['text'],
-              instructions: 'Translate the last German message to English. Only output the English translation, nothing else.'
-            }
-          };
-          log('→ Fordere Übersetzung an...');
-          dataChannel.send(JSON.stringify(responseRequest));
-        }
-        
-        // Text-Response Events (die Übersetzung!)
-        if (ev.type === 'response.text.delta' && ev.delta) {
-          log('→ Übersetzung (partial):', ev.delta);
-          publishSub({ type: 'partial', text: ev.delta });
-        }
-        
-        if (ev.type === 'response.text.done' && ev.text) {
-          log('→ Übersetzung (final):', ev.text);
-          publishSub({ type: 'final', text: ev.text });
-        }
-        
-        // Alternative Response-Typen
-        if (ev.type === 'response.audio_transcript.delta' && ev.delta) {
-          log('→ Audio transcript delta:', ev.delta);
-          publishSub({ type: 'partial', text: ev.delta });
-        }
-        
-        if (ev.type === 'response.audio_transcript.done' && ev.transcript) {
-          log('→ Audio transcript done:', ev.transcript);
-          publishSub({ type: 'final', text: ev.transcript });
-        }
-        
-        // Content-basierte Responses
-        if (ev.type === 'response.content_part.delta' && ev.delta?.text) {
-          log('→ Content delta:', ev.delta.text);
-          publishSub({ type: 'partial', text: ev.delta.text });
-        }
-        
-        if (ev.type === 'response.content_part.done' && ev.part?.text) {
-          log('→ Content done:', ev.part.text);
-          publishSub({ type: 'final', text: ev.part.text });
-        }
-        
-      } catch (err) {
-        log('❌ Fehler beim Event-Parsing:', err);
-      }
-    };
-
-    // Remote audio (falls Modell sprechen würde – bei uns deaktiviert)
-    pc.ontrack = (e) => {
-      log('Remote track erhalten (nicht verwendet)');
-    };
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    log('✓ Offer erstellt');
-
-    log('Sende SDP an OpenAI...');
-    const sdpResp = await fetch(MODEL_URL, {
-      method: "POST",
-      body: offer.sdp,
-      headers: {
-        Authorization: `Bearer ${EPHEMERAL_KEY}`,
-        "Content-Type": "application/sdp"
-      }
-    });
-    
-    if (!sdpResp.ok) {
-      const errorText = await sdpResp.text();
-      throw new Error(`OpenAI SDP Fehler (${sdpResp.status}): ${errorText}`);
-    }
-    
-    const answer = { type: "answer", sdp: await sdpResp.text() };
-    await pc.setRemoteDescription(answer);
-    log('✓ WebRTC-Verbindung etabliert');
-
-    // 3) WS zu unserem Server für Subtitle-Broadcast
-    log('Verbinde zu Subtitle-WebSocket...');
+    // 2) WebSocket zu Server für Subtitle-Broadcast
     subsWS = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/subs');
-    subsWS.onopen = () => log('✓ Subs WS verbunden');
-    subsWS.onerror = (e) => log('❌ Subs WS Fehler:', e);
-    subsWS.onclose = () => log('Subs WS geschlossen');
-
+    subsWS.onopen = () => log('✅ WebSocket verbunden');
+    subsWS.onerror = (e) => log('❌ WebSocket Fehler:', e);
+    subsWS.onclose = () => log('⚠️ WebSocket geschlossen');
+    
+    // 3) MediaRecorder Setup
+    // Nutze webm/opus für beste Kompatibilität
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+      ? 'audio/webm;codecs=opus' 
+      : 'audio/webm';
+    
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+    log('✅ MediaRecorder erstellt:', mimeType);
+    
+    audioChunks = [];
+    
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+        log(`📦 Audio-Chunk empfangen: ${(event.data.size / 1024).toFixed(1)} KB`);
+      }
+    };
+    
+    mediaRecorder.onstop = async () => {
+      if (audioChunks.length > 0) {
+        await sendAudioForTranscription();
+      }
+    };
+    
+    // 4) Starte Aufnahme
+    mediaRecorder.start();
+    log('🔴 Aufnahme gestartet');
+    
+    // 5) Alle 4 Sekunden: Stop → Send → Restart
+    recordingInterval = setInterval(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        log('⏸️ Stoppe Chunk für Übertragung...');
+        mediaRecorder.stop();
+        
+        // Starte neue Aufnahme sofort
+        setTimeout(() => {
+          if (mediaRecorder) {
+            audioChunks = [];
+            mediaRecorder.start();
+            log('▶️ Nächster Chunk gestartet');
+          }
+        }, 100);
+      }
+    }, 4000);
+    
     document.getElementById('stop').disabled = false;
-    log('🎉 Alles bereit! Sprich ins Mikrofon...');
+    document.getElementById('status').textContent = '🔴 AUFNAHME LÄUFT';
+    document.getElementById('status').classList.add('recording');
+    log('🎉 Bereit! Sprich auf Deutsch...');
     
   } catch (err) {
-    log('❌ FEHLER beim Start:', err.message);
-    log('Stack:', err.stack);
+    log('❌ FEHLER:', err.message);
     document.getElementById('start').disabled = false;
-    // Cleanup bei Fehler
-    try { micStream && micStream.getTracks().forEach(t => t.stop()); } catch {}
-    try { pc && pc.close(); } catch {}
+    document.getElementById('status').textContent = 'Fehler: ' + err.message;
   }
 }
 
-function publishSub(payload) {
-  // payload: {type: "partial"|"final", text: "..."}
-  log('📤 publishSub aufgerufen:', JSON.stringify(payload));
-  
-  if (!subsWS) {
-    log('❌ subsWS existiert nicht!');
-    return;
+async function sendAudioForTranscription() {
+  try {
+    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+    log(`📤 Sende ${(audioBlob.size / 1024).toFixed(1)} KB zur Transkription...`);
+    
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'audio.webm');
+    
+    const response = await fetch('/transcribe', {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Server-Fehler (${response.status}): ${errorText}`);
+    }
+    
+    const result = await response.json();
+    log('✅ Antwort erhalten:', JSON.stringify(result, null, 2));
+    
+    if (result.german) {
+      log(`🇩🇪 Deutsch: "${result.german}"`);
+    }
+    if (result.english) {
+      log(`🇬🇧 Englisch: "${result.english}"`);
+    }
+    
+  } catch (err) {
+    log('❌ Fehler beim Senden:', err.message);
   }
-  
-  log('🔌 WebSocket State:', subsWS.readyState, '(1 = OPEN)');
-  
-  if (subsWS.readyState !== 1) {
-    log('❌ WebSocket nicht bereit! State:', subsWS.readyState);
-    return;
-  }
-  
-  if (!payload.text || !payload.text.trim()) {
-    log('❌ Kein Text im Payload!');
-    return;
-  }
-  
-  log('✅ Sende über WebSocket:', payload.text);
-  subsWS.send(JSON.stringify(payload));
 }
 
-async function stop() {
+function stop() {
   document.getElementById('stop').disabled = true;
-  try { dataChannel && dataChannel.close(); } catch {}
-  try { pc && pc.close(); } catch {}
-  try { micStream && micStream.getTracks().forEach(t => t.stop()); } catch {}
-  try { subsWS && subsWS.close(); } catch {}
+  document.getElementById('status').classList.remove('recording');
+  
+  if (recordingInterval) {
+    clearInterval(recordingInterval);
+    recordingInterval = null;
+  }
+  
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+  }
+  
+  if (subsWS) {
+    subsWS.close();
+    subsWS = null;
+  }
+  
+  mediaRecorder = null;
+  audioChunks = [];
+  
   document.getElementById('start').disabled = false;
-  log('Stopped.');
+  document.getElementById('status').textContent = 'Gestoppt';
+  log('⏹️ Aufnahme beendet');
 }
 
 document.getElementById('start').onclick = start;
