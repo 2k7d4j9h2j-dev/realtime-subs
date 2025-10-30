@@ -19,9 +19,28 @@ const out = document.getElementById('out');
 const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/subs');
 
 let pending = '';
+let lastFinal = []; // FIXED: Variable muss VOR der Verwendung deklariert werden
+
+ws.onopen = () => {
+  console.log('WebSocket verbunden');
+  out.textContent = 'Verbunden – warte auf Untertitel...';
+};
+
+ws.onerror = (err) => {
+  console.error('WebSocket Fehler:', err);
+  out.textContent = 'Verbindungsfehler!';
+};
+
+ws.onclose = () => {
+  console.log('WebSocket geschlossen');
+  out.textContent = 'Verbindung getrennt';
+};
+
 ws.onmessage = (m) => {
   try {
     const ev = JSON.parse(m.data);
+    console.log('Empfangenes Event:', ev); // Debug-Logging
+    
     if (ev.type === 'partial') {
       pending = ev.text;
       out.innerHTML = `<span class="final">${lastFinal.join(' ')}</span> <span class="partial">${pending}</span>`;
@@ -31,9 +50,10 @@ ws.onmessage = (m) => {
       pending = '';
       out.innerHTML = `<span class="final">${lastFinal.join(' ')}</span>`;
     }
-  } catch {}
+  } catch (err) {
+    console.error('Fehler beim Parsen der Nachricht:', err);
+  }
 };
-let lastFinal = [];
 </script>
 </body>
 </html>
