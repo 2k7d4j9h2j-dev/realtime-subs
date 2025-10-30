@@ -78,6 +78,16 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
       return res.json({ german: '', english: '' });
     }
     
+    // Prüfe auf Halluzinationen
+    if (isHalluzination(germanText)) {
+      console.log(`🚫 Halluzination gefiltert: "${germanText}"`);
+      return res.json({ 
+        german: '', 
+        english: '',
+        filtered: germanText 
+      });
+    }
+    
     console.log(`🇩🇪 Transkribiert: "${germanText}"`);
     
     // Broadcast deutsche Transkription
@@ -113,6 +123,35 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
+// Bekannte Whisper-Halluzinationen (Case-insensitive Patterns)
+const HALLUZINATION_PATTERNS = [
+  /copyright.*\d{4}/i,
+  /untertitel.*von/i,
+  /thanks for watching/i,
+  /vielen dank.*zuschauen/i,
+  /subscribe/i,
+  /like.*comment/i,
+  /stephanie geiges/i,
+  /^wdr\s*\d+$/i,
+  /^ard$/i,
+  /^zdf$/i
+];
+
+function isHalluzination(text) {
+  if (!text || text.trim().length < 3) return true;
+  
+  const trimmed = text.trim();
+  
+  // Prüfe gegen bekannte Patterns
+  for (const pattern of HALLUZINATION_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 // Whisper API Integration
 async function transcribeWithWhisper(audioBuffer) {
   try {
@@ -127,6 +166,12 @@ async function transcribeWithWhisper(audioBuffer) {
     formData.append('model', 'whisper-1');
     formData.append('language', 'de'); // Deutsch
     formData.append('response_format', 'json');
+    
+    // Prompt hilft gegen Halluzinationen
+    formData.append('prompt', 'Dies ist eine Live-Aufnahme eines deutschen Gesprächs. Transkribiere nur tatsächlich gesprochene Worte.');
+    
+    // Temperature senken für weniger Halluzinationen
+    formData.append('temperature', '0');
     
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',

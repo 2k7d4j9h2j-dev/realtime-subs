@@ -36,6 +36,9 @@ let mediaRecorder = null;
 let audioChunks = [];
 let recordingInterval = null;
 let subsWS = null;
+let audioContext = null;
+let analyser = null;
+let hasRecentSpeech = false;
 
 async function start() {
   try {
@@ -46,6 +49,17 @@ async function start() {
     log('🎤 Fordere Mikrofon-Zugriff an...');
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     log('✅ Mikrofon-Zugriff erhalten');
+    
+    // Audio-Analyse für Voice Activity Detection
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyser);
+    analyser.fftSize = 2048;
+    
+    // Starte Audio-Monitoring
+    monitorAudioLevel();
+    log('✅ Voice Activity Detection aktiv');
     
     // 2) WebSocket zu Server für Subtitle-Broadcast
     subsWS = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/subs');
@@ -81,20 +95,26 @@ async function start() {
     mediaRecorder.start();
     log('🔴 Aufnahme gestartet');
     
-    // 5) Alle 4 Sekunden: Stop → Send → Restart
+    // 5) Alle 4 Sekunden: Stop → Send → Restart (nur wenn Sprache erkannt)
     recordingInterval = setInterval(() => {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
-        log('⏸️ Stoppe Chunk für Übertragung...');
-        mediaRecorder.stop();
-        
-        // Starte neue Aufnahme sofort
-        setTimeout(() => {
-          if (mediaRecorder) {
-            audioChunks = [];
-            mediaRecorder.start();
-            log('▶️ Nächster Chunk gestartet');
-          }
-        }, 100);
+        if (hasRecentSpeech) {
+          log('⏸️ Stoppe Chunk für Übertragung (Sprache erkannt)...');
+          mediaRecorder.stop();
+          hasRecentSpeech = false; // Reset für nächsten Chunk
+          
+          // Starte neue Aufnahme sofort
+          setTimeout(() => {
+            if (mediaRecorder) {
+              audioChunks = [];
+              mediaRecorder.start();
+              log('▶️ Nächster Chunk gestartet');
+            }
+          }, 100);
+        } else {
+          log('⏭️ Überspringe Chunk (keine Sprache erkannt)');
+          audioChunks = []; // Leere Chunks verwerfen
+        }
       }
     }, 4000);
     
@@ -108,6 +128,38 @@ async function start() {
     document.getElementById('start').disabled = false;
     document.getElementById('status').textContent = 'Fehler: ' + err.message;
   }
+}
+
+// Voice Activity Detection - prüft ob aktuell gesprochen wird
+function monitorAudioLevel() {
+  if (!analyser) return;
+  
+  const dataArray = new Uint8Array(analyser.frequencyBinCount);
+  
+  const checkLevel = () => {
+    if (!analyser) return;
+    
+    analyser.getByteTimeDomainData(dataArray);
+    
+    // Berechne RMS (Root Mean Square) für Audio-Energie
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const normalized = (dataArray[i] - 128) / 128;
+      sum += normalized * normalized;
+    }
+    const rms = Math.sqrt(sum / dataArray.length);
+    
+    // Schwellwert für Sprache (experimentell anpassbar)
+    const SPEECH_THRESHOLD = 0.02;
+    
+    if (rms > SPEECH_THRESHOLD) {
+      hasRecentSpeech = true;
+    }
+    
+    requestAnimationFrame(checkLevel);
+  };
+  
+  checkLevel();
 }
 
 async function sendAudioForTranscription() {
@@ -130,6 +182,10 @@ async function sendAudioForTranscription() {
     
     const result = await response.json();
     log('✅ Antwort erhalten:', JSON.stringify(result, null, 2));
+    
+    if (result.filtered) {
+      log('🚫 Halluzination gefiltert:', result.filtered);
+    }
     
     if (result.german) {
       log(`🇩🇪 Deutsch: "${result.german}"`);
@@ -157,6 +213,12 @@ function stop() {
     mediaRecorder.stream.getTracks().forEach(track => track.stop());
   }
   
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+    analyser = null;
+  }
+  
   if (subsWS) {
     subsWS.close();
     subsWS = null;
@@ -164,6 +226,7 @@ function stop() {
   
   mediaRecorder = null;
   audioChunks = [];
+  hasRecentSpeech = false;
   
   document.getElementById('start').disabled = false;
   document.getElementById('status').textContent = 'Gestoppt';
