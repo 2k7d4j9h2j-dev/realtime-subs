@@ -62,35 +62,59 @@ async function start() {
     dataChannel.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data);
-        log('Event:', ev.type, ev);
+        
+        // Nur wichtige Events detailliert loggen
+        if (ev.type.includes('transcript') || ev.type.includes('text')) {
+          log('📝 Event:', ev.type, JSON.stringify(ev, null, 2));
+        } else {
+          log('Event:', ev.type);
+        }
         
         // Verschiedene Event-Typen die OpenAI senden kann:
-        if (ev.type === 'response.output_text.delta' && ev.delta) {
-          publishSub({ type: 'partial', text: ev.delta });
-        }
-        if (ev.type === 'response.output_text.done' && ev.text) {
-          publishSub({ type: 'final', text: ev.text });
-        }
-        // Für Transkriptionen
-        if (ev.type === 'conversation.item.input_audio_transcription.completed' && ev.transcript) {
-          publishSub({ type: 'partial', text: ev.transcript });
-        }
+        
+        // 1. Audio-Transkript Delta (Echtzeit-Übersetzung)
         if (ev.type === 'response.audio_transcript.delta' && ev.delta) {
+          log('→ Sende partial:', ev.delta);
           publishSub({ type: 'partial', text: ev.delta });
         }
+        
+        // 2. Audio-Transkript Done (Vollständige Übersetzung)
         if (ev.type === 'response.audio_transcript.done' && ev.transcript) {
+          log('→ Sende final:', ev.transcript);
           publishSub({ type: 'final', text: ev.transcript });
         }
-        // Response content items
-        if (ev.type === 'response.content_part.added' && ev.part?.text) {
-          publishSub({ type: 'partial', text: ev.part.text });
+        
+        // 3. Eingabe-Transkription (was der User gesagt hat)
+        if (ev.type === 'conversation.item.input_audio_transcription.completed' && ev.transcript) {
+          log('→ Input transkribiert:', ev.transcript);
+          publishSub({ type: 'partial', text: '[DE] ' + ev.transcript });
         }
-        if (ev.type === 'response.text.delta' && ev.delta) {
+        
+        if (ev.type === 'conversation.item.input_audio_transcription.delta' && ev.delta) {
+          log('→ Input delta:', ev.delta);
+        }
+        
+        // 4. Text-basierte Responses (falls Modell Text zurückgibt)
+        if (ev.type === 'response.output_text.delta' && ev.delta) {
+          log('→ Sende text delta:', ev.delta);
           publishSub({ type: 'partial', text: ev.delta });
         }
-        if (ev.type === 'response.text.done' && ev.text) {
+        
+        if (ev.type === 'response.output_text.done' && ev.text) {
+          log('→ Sende text final:', ev.text);
           publishSub({ type: 'final', text: ev.text });
         }
+        
+        if (ev.type === 'response.text.delta' && ev.delta) {
+          log('→ Sende text delta:', ev.delta);
+          publishSub({ type: 'partial', text: ev.delta });
+        }
+        
+        if (ev.type === 'response.text.done' && ev.text) {
+          log('→ Sende text final:', ev.text);
+          publishSub({ type: 'final', text: ev.text });
+        }
+        
       } catch (err) {
         log('❌ Fehler beim Event-Parsing:', err);
       }
