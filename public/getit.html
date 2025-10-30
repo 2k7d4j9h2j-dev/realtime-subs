@@ -16,44 +16,78 @@
   <div class="wrap"><div class="box" id="out">Waiting…</div></div>
 <script>
 const out = document.getElementById('out');
-const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/subs');
-
 let pending = '';
-let lastFinal = []; // FIXED: Variable muss VOR der Verwendung deklariert werden
+let lastFinal = [];
+let ws = null;
+let reconnectTimer = null;
 
-ws.onopen = () => {
-  console.log('WebSocket verbunden');
-  out.textContent = 'Verbunden – warte auf Untertitel...';
-};
-
-ws.onerror = (err) => {
-  console.error('WebSocket Fehler:', err);
-  out.textContent = 'Verbindungsfehler!';
-};
-
-ws.onclose = () => {
-  console.log('WebSocket geschlossen');
-  out.textContent = 'Verbindung getrennt';
-};
-
-ws.onmessage = (m) => {
-  try {
-    const ev = JSON.parse(m.data);
-    console.log('Empfangenes Event:', ev); // Debug-Logging
+function connect() {
+  console.log('🔌 Verbinde WebSocket...');
+  const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/subs';
+  console.log('URL:', wsUrl);
+  
+  ws = new WebSocket(wsUrl);
+  
+  ws.onopen = () => {
+    console.log('✅ WebSocket verbunden!');
+    out.textContent = 'Verbunden – warte auf Untertitel...';
+    out.style.color = '#fff';
     
-    if (ev.type === 'partial') {
-      pending = ev.text;
-      out.innerHTML = `<span class="final">${lastFinal.join(' ')}</span> <span class="partial">${pending}</span>`;
-    } else if (ev.type === 'final') {
-      lastFinal.push(ev.text);
-      if (lastFinal.length > 8) lastFinal.shift(); // einfache Historie
-      pending = '';
-      out.innerHTML = `<span class="final">${lastFinal.join(' ')}</span>`;
+    // Sende Ping alle 30 Sekunden um Verbindung am Leben zu halten
+    if (reconnectTimer) clearInterval(reconnectTimer);
+    reconnectTimer = setInterval(() => {
+      if (ws && ws.readyState === 1) {
+        console.log('💓 Ping...');
+      }
+    }, 30000);
+  };
+
+  ws.onerror = (err) => {
+    console.error('❌ WebSocket Fehler:', err);
+    out.textContent = 'Verbindungsfehler!';
+    out.style.color = '#f00';
+  };
+
+  ws.onclose = (e) => {
+    console.log('❌ WebSocket geschlossen. Code:', e.code, 'Reason:', e.reason);
+    out.textContent = 'Verbindung getrennt - versuche Reconnect...';
+    out.style.color = '#fa0';
+    
+    if (reconnectTimer) clearInterval(reconnectTimer);
+    
+    // Auto-Reconnect nach 2 Sekunden
+    console.log('⏳ Reconnect in 2 Sekunden...');
+    setTimeout(connect, 2000);
+  };
+
+  ws.onmessage = (m) => {
+    try {
+      console.log('📩 Rohdaten empfangen:', m.data);
+      const ev = JSON.parse(m.data);
+      console.log('📝 Geparst:', ev);
+      
+      if (ev.type === 'partial') {
+        pending = ev.text;
+        const display = lastFinal.length > 0 
+          ? `<span class="final">${lastFinal.join(' ')}</span> <span class="partial">${pending}</span>`
+          : `<span class="partial">${pending}</span>`;
+        out.innerHTML = display;
+        console.log('✓ Partial angezeigt:', pending);
+      } else if (ev.type === 'final') {
+        lastFinal.push(ev.text);
+        if (lastFinal.length > 8) lastFinal.shift();
+        pending = '';
+        out.innerHTML = `<span class="final">${lastFinal.join(' ')}</span>`;
+        console.log('✓ Final angezeigt:', ev.text);
+      }
+    } catch (err) {
+      console.error('❌ Fehler beim Parsen:', err, 'Rohdaten:', m.data);
     }
-  } catch (err) {
-    console.error('Fehler beim Parsen der Nachricht:', err);
-  }
-};
+  };
+}
+
+// Initial-Verbindung
+connect();
 </script>
 </body>
 </html>
