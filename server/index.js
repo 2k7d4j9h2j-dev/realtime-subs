@@ -35,12 +35,18 @@ app.post('/session', async (req, res) => {
         voice: 'alloy',
         modalities: ["text", "audio"],
         instructions: "You are a real-time German-to-English translator. Your ONLY job is to translate German speech into English. When you hear German, immediately respond with the English translation. Be concise and natural. Do not add explanations, just translate.",
-        // WICHTIG: turn_detection mit create_response muss auf false, damit wir manuell steuern können
-        turn_detection: null,
+        // WICHTIG: turn_detection aktiviert, aber create_response auf FALSE
+        // So wird Audio erkannt & transkribiert, aber keine automatische leere Response
+        turn_detection: { 
+          type: "server_vad",
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 200,
+          create_response: false  // ← Das ist der Schlüssel!
+        },
         input_audio_transcription: {
           model: "whisper-1"
         },
-        // Textausgabe priorisieren
         temperature: 0.6
       })
     });
