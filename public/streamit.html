@@ -95,11 +95,11 @@ async function start() {
     mediaRecorder.start();
     log('🔴 Aufnahme gestartet');
     
-    // 5) Alle 4 Sekunden: Stop → Send → Restart (nur wenn Sprache erkannt)
+    // 5) Alle 2 Sekunden: Stop → Send → Restart (nur wenn Sprache erkannt)
+    // Kürzere Intervalle = schnellere Live-Reaktion
     recordingInterval = setInterval(() => {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
         if (hasRecentSpeech) {
-          log('⏸️ Stoppe Chunk für Übertragung (Sprache erkannt)...');
           mediaRecorder.stop();
           hasRecentSpeech = false; // Reset für nächsten Chunk
           
@@ -108,15 +108,13 @@ async function start() {
             if (mediaRecorder) {
               audioChunks = [];
               mediaRecorder.start();
-              log('▶️ Nächster Chunk gestartet');
             }
-          }, 100);
+          }, 50);
         } else {
-          log('⏭️ Überspringe Chunk (keine Sprache erkannt)');
           audioChunks = []; // Leere Chunks verwerfen
         }
       }
-    }, 4000);
+    }, 2000); // 2 Sekunden statt 4 = doppelt so schnell!
     
     document.getElementById('stop').disabled = false;
     document.getElementById('status').textContent = '🔴 AUFNAHME LÄUFT';
@@ -165,7 +163,7 @@ function monitorAudioLevel() {
 async function sendAudioForTranscription() {
   try {
     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-    log(`📤 Sende ${(audioBlob.size / 1024).toFixed(1)} KB zur Transkription...`);
+    const startTime = Date.now();
     
     const formData = new FormData();
     formData.append('audio', audioBlob, 'audio.webm');
@@ -181,21 +179,19 @@ async function sendAudioForTranscription() {
     }
     
     const result = await response.json();
-    log('✅ Antwort erhalten:', JSON.stringify(result, null, 2));
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     
     if (result.filtered) {
-      log('🚫 Halluzination gefiltert:', result.filtered);
+      log(`🚫 Halluzination gefiltert`);
+      return;
     }
     
-    if (result.german) {
-      log(`🇩🇪 Deutsch: "${result.german}"`);
-    }
     if (result.english) {
-      log(`🇬🇧 Englisch: "${result.english}"`);
+      log(`⚡ ${duration}s → 🇬🇧 "${result.english}"`);
     }
     
   } catch (err) {
-    log('❌ Fehler beim Senden:', err.message);
+    log('❌ Fehler:', err.message);
   }
 }
 

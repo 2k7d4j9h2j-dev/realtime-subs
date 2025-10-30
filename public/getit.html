@@ -67,26 +67,30 @@ function connect() {
       
       // Konvertiere Blob/ArrayBuffer zu Text
       if (m.data instanceof Blob) {
-        console.log('📩 Blob empfangen, konvertiere...');
         text = await m.data.text();
       } else if (m.data instanceof ArrayBuffer) {
-        console.log('📩 ArrayBuffer empfangen, konvertiere...');
         text = new TextDecoder().decode(m.data);
       } else {
         text = m.data;
       }
       
-      console.log('📩 Text empfangen:', text);
       const ev = JSON.parse(text);
-      console.log('📝 Geparst:', ev);
       
-      if (ev.type === 'partial') {
+      // Ignoriere deutsche Transkriptionen (partial mit [🇩🇪])
+      if (ev.type === 'partial' && ev.text && ev.text.includes('[🇩🇪]')) {
+        console.log('⏭️ Deutsche Transkription übersprungen');
+        return;
+      }
+      
+      // Zeige nur englische Übersetzungen
+      if (ev.type === 'translation') {
+        // Direkt als partial anzeigen für schnelleres Feedback
         pending = ev.text;
         const display = lastFinal.length > 0 
           ? `<span class="final">${lastFinal.join(' ')}</span> <span class="partial">${pending}</span>`
           : `<span class="partial">${pending}</span>`;
         out.innerHTML = display;
-        console.log('✓ Partial angezeigt:', pending);
+        console.log('✓ Übersetzung (partial):', pending);
       } else if (ev.type === 'final') {
         lastFinal.push(ev.text);
         if (lastFinal.length > 8) lastFinal.shift();
@@ -95,7 +99,7 @@ function connect() {
         console.log('✓ Final angezeigt:', ev.text);
       }
     } catch (err) {
-      console.error('❌ Fehler beim Parsen:', err, 'Rohdaten:', m.data);
+      console.error('❌ Fehler:', err);
     }
   };
 }

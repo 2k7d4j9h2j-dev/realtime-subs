@@ -90,23 +90,24 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     
     console.log(`🇩🇪 Transkribiert: "${germanText}"`);
     
-    // Broadcast deutsche Transkription
-    broadcastSubtitle({
-      type: 'partial',
-      text: `[🇩🇪] ${germanText}`
-    });
-    
-    // 2) GPT-4 für Übersetzung DE → EN
-    console.log('🔄 Übersetze nach Englisch...');
+    // 2) GPT-4 für Übersetzung DE → EN (direkt, ohne deutsche Anzeige)
     const englishText = await translateToEnglish(germanText);
     
     console.log(`🇬🇧 Übersetzt: "${englishText}"`);
     
-    // Broadcast englische Übersetzung
+    // Broadcast NUR englische Übersetzung (schneller, ohne deutschen Zwischenschritt)
     broadcastSubtitle({
-      type: 'final',
+      type: 'translation',
       text: englishText
     });
+    
+    // Nach kurzer Zeit als "final" markieren
+    setTimeout(() => {
+      broadcastSubtitle({
+        type: 'final',
+        text: englishText
+      });
+    }, 1500);
     
     // Response an Client
     res.json({
@@ -206,19 +207,19 @@ async function translateToEnglish(germanText) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini', // Schneller und günstiger für einfache Übersetzungen
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
-            content: 'You are a professional German-to-English translator. Translate the given German text to natural, fluent English. Only output the translation, nothing else. Preserve the tone and style of the original.'
+            content: 'Translate German to English. Output ONLY the English translation, nothing else.'
           },
           {
             role: 'user',
             content: germanText
           }
         ],
-        temperature: 0.3, // Niedrig für konsistente Übersetzungen
-        max_tokens: 500
+        temperature: 0.2,
+        max_tokens: 200 // Kürzer = schneller
       })
     });
     
