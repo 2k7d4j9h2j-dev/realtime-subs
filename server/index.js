@@ -68,20 +68,36 @@ app.post('/session', async (req, res) => {
 
 // 2) WebSocket-Bus für Untertitel (Publisher = streamit, Viewer = getit)
 const server = app.listen(process.env.PORT || 3000, () => {
-  console.log('Server listening on', server.address().port);
+  console.log('🚀 Server listening on', server.address().port);
 });
 const wss = new WebSocketServer({ server, path: '/ws/subs' });
 
 const clients = new Set();
 wss.on('connection', (ws) => {
   clients.add(ws);
+  console.log('📡 Neuer WebSocket-Client verbunden. Gesamt:', clients.size);
+  
   ws.on('message', (msg) => {
-    // Einfaches Broadcast-Protokoll: {type:"partial"|"final", text:"..."}
+    console.log('📨 Nachricht empfangen:', msg.toString());
+    console.log('👥 Anzahl verbundener Clients:', clients.size);
+    
+    let broadcastCount = 0;
     for (const c of clients) {
       if (c !== ws && c.readyState === 1) {
+        console.log('📤 Leite weiter an Client...');
         c.send(msg);
+        broadcastCount++;
       }
     }
+    console.log('✅ An', broadcastCount, 'Client(s) weitergeleitet');
   });
-  ws.on('close', () => clients.delete(ws));
+  
+  ws.on('close', () => {
+    clients.delete(ws);
+    console.log('❌ Client disconnected. Verbleibend:', clients.size);
+  });
+  
+  ws.on('error', (err) => {
+    console.error('❌ WebSocket Error:', err);
+  });
 });
