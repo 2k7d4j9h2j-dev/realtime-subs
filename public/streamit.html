@@ -177,9 +177,27 @@ async function start() {
 
 function publishSub(payload) {
   // payload: {type: "partial"|"final", text: "..."}
-  if (subsWS && subsWS.readyState === 1 && payload.text && payload.text.trim()) {
-    subsWS.send(JSON.stringify(payload));
+  log('📤 publishSub aufgerufen:', JSON.stringify(payload));
+  
+  if (!subsWS) {
+    log('❌ subsWS existiert nicht!');
+    return;
   }
+  
+  log('🔌 WebSocket State:', subsWS.readyState, '(1 = OPEN)');
+  
+  if (subsWS.readyState !== 1) {
+    log('❌ WebSocket nicht bereit! State:', subsWS.readyState);
+    return;
+  }
+  
+  if (!payload.text || !payload.text.trim()) {
+    log('❌ Kein Text im Payload!');
+    return;
+  }
+  
+  log('✅ Sende über WebSocket:', payload.text);
+  subsWS.send(JSON.stringify(payload));
 }
 
 async function stop() {
